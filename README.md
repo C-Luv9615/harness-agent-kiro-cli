@@ -7,7 +7,7 @@ AI-driven development workflow for embedded C/NuttX projects. Combines SDD (Spec
 ```
 harness-agent/
 ├── install.sh              ← 一键安装（支持 kiro-cli / claude）
-├── skills/                 ← 共享 skill（两个平台通用，16 个）
+├── skills/                 ← 共享 skill（两个平台通用，19 个）
 │   ├── session-handoff/
 │   ├── vela-harness/
 │   ├── harness-lessons/
@@ -120,7 +120,7 @@ session-handoff → init → ├─── specify → SDD 规划 ─────
 | `status` | Show progress |
 | `loop` | Full workflow with pause at each stage |
 
-## Skills (16)
+## Skills (19)
 
 | Skill | Description |
 |-------|-------------|
@@ -130,8 +130,11 @@ session-handoff → init → ├─── specify → SDD 规划 ─────
 | `vela-run` | Run on QEMU, FVP, simulator, or real hardware |
 | `vela-review` | Multi-dimension code review |
 | `harness-lessons` | Structured experience capture with staleness detection and refresh |
-| `cmocka-unit-test` | Generate cmocka unit tests for C code |
-| `tdd-workflow` | RED-GREEN-REFACTOR cycle for embedded C |
+| `unit-test-gen` | Auto-detect framework, generate unit tests for any language |
+| `test-driven-development` | RED-GREEN-REFACTOR discipline for any language |
+| `cmocka-unit-test` | Generate cmocka unit tests for NuttX/Vela C code |
+| `gtest-unit-test` | Generate gtest + gmock unit tests for NuttX/Vela C++ code |
+| `interactive-form` | Browser-based rich form for structured user input |
 | `executor` | Persistent interactive CLI process management |
 | `git-commit` | NuttX-style commit with checkpatch validation |
 | `git-worktree` | Git worktree for isolated parallel development |
