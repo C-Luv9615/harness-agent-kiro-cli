@@ -1,14 +1,16 @@
 ---
 name: vela-harness
 description: >
-  Automated test harness for Vela/NuttX: build → run → test → parse results → feedback loop.
-  Orchestrates vela-build, vela-run, cmocka-unit-test, and executor skills into a closed-loop
-  verification pipeline. Use when user says "harness", "验证闭环", "跑测试", "run tests",
+  Automated test harness: build → run → test → parse results → feedback loop.
+  Orchestrates build, run, test skills into a closed-loop verification pipeline.
+  Auto-detects test framework from project context (cmocka, gtest, pytest, jest,
+  vitest, mocha, cargo test, go test, node test runner, etc.).
+  Use when user says "harness", "验证闭环", "跑测试", "run tests",
   "test loop", "自动验证", "build and test", "编译跑测试", or after code generation needs
   automated verification. Also triggers when spec-design tasks need execution with verification.
 ---
 
-# Vela Harness — Automated Build-Test-Verify Loop for NuttX
+# Harness — Automated Build-Test-Verify Loop
 
 Orchestrate existing skills into a closed-loop: code change → build → run → test → parse → fix/pass.
 
@@ -32,135 +34,168 @@ Human stays in the loop at two points:
 ## Input
 
 Required:
-- **target**: Build target (e.g., `qemu-armv8a:nsh_smp`, `sim:cmocka`)
-- **test_cmd**: Test command to run on NSH (e.g., `cmocka_test_sched_timer`)
+- **test_cmd**: Test command or test file/module (e.g., `cmocka_test_sched_timer`, `pytest tests/`, `npx jest`)
 
 Optional:
+- **target**: Build target for compiled languages (e.g., `qemu-armv8a:nsh_smp`, `sim:cmocka`)
 - **source_files**: Files being modified (for targeted rebuild)
 - **max_retries**: Auto-fix retry limit (default: 3)
-- **run_target**: Override run target if different from build (e.g., `simulator`)
+- **framework**: Override auto-detected framework (e.g., `jest`, `pytest`, `cmocka`)
+
+## Framework Auto-Detection
+
+Delegate to `unit-test-gen` skill for framework detection. Harness receives the detected framework and uses it to determine build, run, and parse strategies.
+
+If `unit-test-gen` cannot detect a framework, prompt the user:
+```
+⚠️ 未检测到测试框架。请指定：
+  1. 项目使用的测试框架（如 jest, pytest, cmocka）
+  2. 运行测试的命令
+```
 
 ## Skill Dependencies
 
-| Phase | Skill Used | Purpose |
-|-------|-----------|---------|
-| Build | `vela-build` | Compile NuttX/Vela target |
-| Run | `vela-run` + `executor` | Launch QEMU/simulator, get interactive shell |
-| Test | `executor` | Send test command, capture output |
+| Phase | Skill Used | When |
+|-------|-----------|------|
+| Build | `vela-build` | NuttX/Vela targets |
+| Run | `vela-run` + `executor` | NuttX targets (QEMU/simulator) |
+| Test Gen | `unit-test-gen` | All languages — auto-detects framework, delegates to cmocka-unit-test/gtest-unit-test for NuttX or generates directly |
+| TDD Discipline | `test-driven-development` | Always — enforces Red-Green-Refactor |
+| Test Run | `executor` | NuttX targets |
+| Test Run | `execute_bash` | All other languages (direct command) |
 | Fix | (AI direct) | Analyze failure, propose code fix |
 | Commit | `git-commit` | Commit passing changes |
 
 ## Workflow
 
-### Step 1: Validate Environment
+### Step 1: Detect Framework & Validate Environment
 
+Call `unit-test-gen` to detect the project's test framework.
+
+If test code doesn't exist yet, prompt with the appropriate skill:
+```
+⚠️ 未找到测试代码。是否先生成测试？
+  检测到框架: {framework}
+  推荐: unit-test-gen skill
+```
+
+### Step 2: Build (compiled languages only)
+
+**NuttX/Vela** — use `vela-build` skill:
 ```bash
-# Check build system exists
-ls nuttx/Makefile || ls nuttx/CMakeLists.txt
-
-# Check test binary is configured (for cmocka tests)
-# User should have already run cmocka-unit-test skill to generate test code
-```
-
-If test code doesn't exist yet, prompt:
-```
-⚠️ 未找到测试代码。是否先用 cmocka-unit-test skill 生成测试？
-```
-
-### Step 2: Build
-
-Use `vela-build` skill to compile.
-
-**Build failure handling:**
-1. Capture compiler error output
-2. Parse error: file, line, message
-3. Display to user with proposed fix
-4. If user approves → apply fix → rebuild (count as 1 retry)
-5. If build fails after max_retries → stop, report
-
-**Key build commands by target type:**
-
-```bash
-# NuttX CMake (preferred)
 cmake -Bbuild -GNinja -DBOARD_CONFIG={target} nuttx
 ninja -C build
-
-# Simulator (for cmocka tests)
-cmake -Bbuild -GNinja -DBOARD_CONFIG=sim:cmocka nuttx
-ninja -C build
 ```
 
-### Step 3: Run
+**Rust:**
+```bash
+cargo build --tests
+```
 
-Launch the target using `vela-run` + `executor` skill.
+**Go:**
+```bash
+go build ./...
+```
 
-**For simulator (most common for unit tests):**
+**JS/TS/Python** — skip build step (interpreted).
+
+**Build failure handling:** same as before — capture error, propose fix, user approves, retry.
+
+### Step 3: Run Tests
+
+**NuttX/Vela** — via `executor` (interactive NSH shell):
 ```python
-executor_start(command="./build/nuttx")
-# Wait for NSH prompt
-executor_send(text="", wait_time=1.0)  # wait for "nsh>"
+executor_start(command="./build/nuttx")  # or QEMU
+executor_send(text="{test_cmd}", wait_time=5.0, full_buffer=true, tail_lines=200)
 ```
 
-**For QEMU:**
-```python
-executor_start(command="qemu-system-aarch64", args=[...])
-executor_send(text="", wait_time=2.0)  # wait for boot + "nsh>"
+**All other languages** — via `execute_bash`:
+
+| Framework | Command |
+|-----------|---------|
+| Jest | `npx jest --verbose --no-coverage 2>&1` |
+| Vitest | `npx vitest run --reporter=verbose 2>&1` |
+| Mocha | `npx mocha --reporter spec 2>&1` |
+| Node test | `node --test 2>&1` |
+| pytest | `pytest -v 2>&1` |
+| unittest | `python -m unittest -v 2>&1` |
+| cargo test | `cargo test -- --nocapture 2>&1` |
+| go test | `go test -v ./... 2>&1` |
+
+### Step 4: Parse Results
+
+Each framework has its own output format. Parse by detected framework:
+
+#### cmocka
 ```
-
-**Boot detection:** Look for `nsh>` prompt in output. Timeout after 30s → report boot failure.
-
-### Step 4: Execute Test
-
-Send test command and capture output:
-
-```python
-executor_send(
-    text="{test_cmd}",
-    wait_time=5.0,    # cmocka tests usually finish in seconds
-    full_buffer=true,
-    tail_lines=200
-)
-```
-
-### Step 5: Parse Results
-
-Parse cmocka output format:
-
-```
-[==========] module_tests: Running N test(s).
-[ RUN      ] test_func_normal
-[       OK ] test_func_normal
-[ RUN      ] test_func_null_param
-[  FAILED  ] test_func_null_param
-[==========] module_tests: N test(s) run.
 [  PASSED  ] X test(s).
 [  FAILED  ] Y test(s).
 ```
+Match: `[       OK ]`, `[  FAILED  ]`, `[  PASSED  ]`
 
-Extract:
-- **total**: number of tests run
-- **passed**: count of `[  PASSED  ]` or `[       OK ]`
-- **failed**: count of `[  FAILED  ]`
-- **failed_tests**: list of failed test names
-- **failure_details**: lines between `[ RUN ]` and `[  FAILED  ]` for each failure
+#### gtest
+```
+[  PASSED  ] X tests.
+[  FAILED  ] Y tests.
+```
+Match: `[       OK ]`, `[  FAILED  ]`, `[  PASSED  ]` (same as cmocka)
 
-**Other failure modes to detect:**
+#### Jest / Vitest
+```
+Tests:       2 failed, 15 passed, 17 total
+```
+Match: `Tests:` summary line. Failed tests prefixed with `✕` or `FAIL`.
+
+#### Mocha
+```
+  3 passing (10ms)
+  1 failing
+```
+Match: `passing`, `failing`. Failed tests indented with error details.
+
+#### pytest
+```
+2 passed, 1 failed in 0.12s
+```
+Match: `passed`, `failed` in summary. Failed tests under `FAILURES` section.
+
+#### cargo test
+```
+test result: FAILED. 1 passed; 1 failed; 0 ignored
+```
+Match: `test result:` line.
+
+#### go test
+```
+ok   package  0.003s
+FAIL package  0.003s
+```
+Match: `ok` / `FAIL` per package. `--- FAIL:` per test.
+
+#### Node test runner
+```
+# tests 5
+# pass 4
+# fail 1
+```
+Match: TAP format `# pass`, `# fail`.
+
+#### Universal failure patterns (all frameworks)
 
 | Pattern | Meaning |
 |---------|---------|
-| `ASSERT` / `assert` in output | NuttX assertion failure |
 | `Segmentation fault` / `SIGSEGV` | Crash |
-| `Timeout` (no output for 30s) | Hang/deadlock |
-| `command not found` | Test binary not built/configured |
-| No `nsh>` after boot | Boot failure |
+| `Timeout` / no output for 30s | Hang/deadlock |
+| `command not found` / `MODULE_NOT_FOUND` | Missing dependency |
+| Non-zero exit code with no parseable output | Unknown failure — show raw output |
 
-### Step 6: Report & Decide
+### Step 5: Report & Decide
 
 **All tests pass:**
 ```
 ✅ Harness PASS — {total} tests, all passed.
-  Target: {target}
-  Test: {test_cmd}
+  Framework: {framework}
+  Command: {test_cmd}
   Time: {elapsed}s
 
 是否提交？(使用 git-commit skill)
@@ -169,9 +204,9 @@ Extract:
 **Some tests fail:**
 ```
 ❌ Harness FAIL — {passed}/{total} passed, {failed} failed.
+  Framework: {framework}
   Failed tests:
-    - test_func_null_param: expected 0, got -1
-    - test_func_boundary: segfault at line 42
+    - {test_name}: {brief reason}
 
 Retry {current}/{max_retries}. AI 分析失败原因并提出修复方案：
 
@@ -180,9 +215,7 @@ Retry {current}/{max_retries}. AI 分析失败原因并提出修复方案：
 是否应用修复？[y/n]
 ```
 
-**If user approves fix → apply → go to Step 2 (rebuild)**
-**If user rejects → stop, let user fix manually**
-**If max_retries reached:**
+**Max retries reached:**
 ```
 ⚠️ 已达到最大重试次数 ({max_retries})。
   尝试过的修复：
@@ -194,38 +227,39 @@ Retry {current}/{max_retries}. AI 分析失败原因并提出修复方案：
   - {source_file}:{line} — {issue}
 ```
 
-### Step 7: Cleanup
+### Step 6: Cleanup
 
+For NuttX/executor-based runs:
 ```python
 executor_stop(process_id="{pid}")
 ```
 
-Always stop the executor process, even on failure.
+Always stop executor processes, even on failure. Bash-based runs need no cleanup.
 
 ## Batch Mode
 
-For running multiple test modules in sequence:
+Run multiple test modules/files in sequence:
 
 ```
-harness batch target=sim:cmocka tests="cmocka_test_sched_timer cmocka_test_mm_heap cmocka_test_task"
+harness batch tests="cmocka_test_a cmocka_test_b cmocka_test_c"
+harness batch tests="tests/test_auth.py tests/test_api.py"
 ```
 
 Workflow:
-1. Build once
-2. Start simulator once
-3. Run each test_cmd sequentially
-4. Collect all results
-5. Report summary:
+1. Build once (if compiled)
+2. Run each test sequentially
+3. Collect all results
+4. Report summary:
 
 ```
 📊 Batch Results — 3 modules, 47 tests total
 
-  ✅ cmocka_test_sched_timer: 15/15 passed
-  ❌ cmocka_test_mm_heap: 12/14 passed (2 failed)
-  ✅ cmocka_test_task: 18/18 passed
+  ✅ module_a: 15/15 passed
+  ❌ module_b: 12/14 passed (2 failed)
+  ✅ module_c: 18/18 passed
 
 Overall: 45/47 passed (95.7%)
-Failed: cmocka_test_mm_heap → test_mm_malloc_boundary, test_mm_free_double
+Failed: module_b → test_boundary, test_double_free
 ```
 
 ## Integration with SDD Workflow
@@ -234,30 +268,20 @@ When used after `spec-design` skill generates a task list:
 
 ```
 spec-design → tasks[] → for each task:
-  1. cmocka-unit-test → generate test code
+  1. Generate tests (via detected framework's skill or AI)
   2. vela-harness → build + run tests (expect RED)
   3. Implement code
   4. vela-harness → build + run tests (expect GREEN)
   5. git-commit → commit
 ```
 
-This is the full SDD + TDD + Harness loop.
-
-## Quick Reference
-
-| Command | Description |
-|---------|-------------|
-| `harness target=sim:cmocka test=cmocka_test_xxx` | Single test module |
-| `harness batch target=sim:cmocka tests="a b c"` | Multiple test modules |
-| `harness target=qemu-armv8a:nsh_smp test=xxx` | Test on QEMU ARM64 |
-| `harness --build-only target=sim:cmocka` | Only build, skip run |
-| `harness --no-fix target=sim:cmocka test=xxx` | Run without auto-fix loop |
-
 ## Key Rules
 
+- **TDD test phase is mandatory by default** — always generate and run tests unless the user explicitly says to skip testing (e.g., "跳过测试", "不用写测试", "skip tests")
+- **Auto-detect framework, don't assume** — always detect from project files before running; never hardcode a framework assumption
 - **Never auto-apply fixes without user approval** — always show proposed fix first
 - **Always cleanup executor processes** — even on error/timeout
-- **Parse output strictly** — don't guess test results, parse cmocka format
+- **Parse output strictly** — use the detected framework's parser, don't guess test results
 - **Preserve test code** — harness never modifies test files, only implementation files
 - **One retry = one build-run cycle** — don't count parse/analysis as retry
 - **Timeout is a failure** — treat hangs same as test failures

@@ -75,9 +75,18 @@
 - **单 Git 仓库** → `git-worktree` skill
 - **用户选择不隔离** → 在当前分支继续
 
+选择后，将工作区信息写入 `.harness/PROGRESS.md` 的头部元数据区：
+```markdown
+## 工作区
+- 类型: worktree | repoworktree | none
+- 分支: feature/xxx
+- 路径: /path/to/worktree（仅隔离时）
+```
+session-handoff 恢复时读取此信息，提醒用户当前所在工作区。收尾阶段据此判断是否需要分支合并/清理。
+
 每个 task 严格遵循：
 1. **经验检索** — grep `.harness/lessons-learned.md` 搜索相关模块/关键词
-2. **读接口** → **写测试 RED**（`cmocka-unit-test` skill）→ **最小实现 GREEN** → **重构** → **回顾验证**（对照设计逐条确认）→ **更新 PROGRESS.md**
+2. **读接口** → **写测试 RED**（`unit-test-gen` skill，自动检测框架）→ **最小实现 GREEN** → **重构** → **回顾验证**（对照设计逐条确认）→ **更新 PROGRESS.md**
 
 ## 代码审查（阶段 2.5）
 
